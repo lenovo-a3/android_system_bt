@@ -860,6 +860,23 @@ static bool filter_incoming_event(BT_HDR *packet) {
       LOG_WARN(LOG_TAG, "%s command status event with no matching command. opcode: 0x%x", __func__, opcode);
     else if (wait_entry->status_callback)
       wait_entry->status_callback(status, wait_entry->command, wait_entry->context);
+    else if (wait_entry->complete_future && status != HCI_SUCCESS && packet->len >= 6) {
+      // Some controllers (MT6628) reject an unknown command, such as the
+      // BLE vendor capabilities query in controller start_up, with a failed
+      // command status instead of a command complete with an error status.
+      // Nothing else will complete the future, so the caller would wait
+      // forever. Turn the event into the equivalent command complete (same
+      // length: credits, opcode, status) and hand it to the waiter.
+      uint8_t *p = packet->data;
+      UINT8_TO_STREAM(p, HCI_COMMAND_COMPLETE_EVT);
+      UINT8_TO_STREAM(p, 4);
+      UINT8_TO_STREAM(p, command_credits);
+      UINT16_TO_STREAM(p, opcode);
+      UINT8_TO_STREAM(p, status);
+      LOG_WARN(LOG_TAG, "%s command status 0x%x for opcode 0x%x, completing it as failed", __func__, status, opcode);
+      event_code = HCI_COMMAND_COMPLETE_EVT;
+      future_ready(wait_entry->complete_future, packet);
+    }
 
     goto intercepted;
   }
